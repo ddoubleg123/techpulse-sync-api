@@ -16,8 +16,9 @@ app.use(cors({
 }));
 app.use(express.json());
 
-const otpStore = new Map();
-const userStore = new Map();
+// OTP storage removed 2026-04-29 (G12). The OTP routes were broken on Render free tier
+// (in-memory Map blown away on cold start every 15 min) and no email-sending lib was installed.
+// sync-api retires under G4 — replaced by Supabase Auth's built-in magic-link if ever needed.
 
 userStore.set('test@example.com', { id: '1', email: 'test@example.com', name: 'Test User', hasPaymentMethodOnFile: false });
 userStore.set('demo@techpulse.dev', { id: '2', email: 'demo@techpulse.dev', name: 'Demo User', hasPaymentMethodOnFile: true });
@@ -54,39 +55,11 @@ async function getGoogleUser(code) {
 app.get('/health', (req, res) => res.json({ status: 'OK', timestamp: new Date().toISOString() }));
 app.get('/', (req, res) => res.json({ status: 'TechPulse Auth API' }));
 
-app.post('/api/auth/email/send-otp', async (req, res) => {
-  try {
-    const { email } = req.body;
-    if (!email) return res.status(400).json({ message: 'Email is required' });
-    const otp = generateOTP();
-    otpStore.set(email, { code: otp, expires: Date.now() + 5 * 60 * 1000 });
-    console.log(`OTP for ${email}: ${otp}`);
-    res.json({ message: 'OTP sent successfully', debug: { otp } });
-  } catch (err) {
-    res.status(500).json({ message: 'Failed to send OTP' });
-  }
-});
+// OTP routes (/api/auth/email/send-otp, /api/auth/email/verify-otp) removed 2026-04-29 (G12).
+// Reason: routes were broken on Render free tier and no email transport was configured.
+// Auth flow now uses Google OAuth only (the routes below).
+// sync-api retires under G4 — Supabase Auth has built-in magic-link if needed.
 
-app.post('/api/auth/email/verify-otp', async (req, res) => {
-  try {
-    const { email, otp } = req.body;
-    if (!email || !otp) return res.status(400).json({ message: 'Email and OTP are required' });
-    const stored = otpStore.get(email);
-    if (!stored) return res.status(400).json({ message: 'OTP not found or expired' });
-    if (Date.now() > stored.expires) { otpStore.delete(email); return res.status(400).json({ message: 'OTP expired' }); }
-    if (stored.code !== otp) return res.status(400).json({ message: 'Invalid OTP' });
-    otpStore.delete(email);
-    let user = userStore.get(email);
-    if (!user) {
-      user = { id: crypto.randomUUID(), email, name: email.split('@')[0], hasPaymentMethodOnFile: false };
-      userStore.set(email, user);
-    }
-    const token = generateToken(user);
-    res.json({ message: 'Authentication successful', user, token });
-  } catch (err) {
-    res.status(500).json({ message: 'Authentication failed' });
-  }
-});
 
 // Initiates Google OAuth — redirect_uri must match Google Cloud Console exactly
 app.get('/api/auth/google', (req, res) => {
