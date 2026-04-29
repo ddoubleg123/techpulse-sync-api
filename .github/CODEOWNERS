@@ -1,0 +1,6 @@
+# TechPulse Sync API — CODEOWNERS
+# Note: This service is scheduled for retirement under G4 (web auth migration
+# to Supabase Auth). Once G4 Phase 4 completes, this repo will be archived.
+# In the interim, all changes go through Daniel.
+
+* @ddoubleg123
