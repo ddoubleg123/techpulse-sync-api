@@ -1,0 +1,7 @@
+# TechPulse Auth API — CODEOWNERS
+#
+# This service is slated for retirement per Gap Analysis G4 (web
+# migrates to Supabase Auth, with Mike's rescoped Locked Rule #6).
+# Until that migration completes, Daniel is sole owner.
+
+*                                             @ddoubleg123
