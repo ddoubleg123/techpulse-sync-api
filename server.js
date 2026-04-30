@@ -23,6 +23,9 @@ app.use(express.json());
 // In-memory user store (resets on each Render restart)
 const userStore = new Map();
 
+// In-memory user store (resets on each Render restart)
+const userStore = new Map();
+
 userStore.set('test@example.com', { id: '1', email: 'test@example.com', name: 'Test User', hasPaymentMethodOnFile: false });
 userStore.set('demo@techpulse.dev', { id: '2', email: 'demo@techpulse.dev', name: 'Demo User', hasPaymentMethodOnFile: true });
 
