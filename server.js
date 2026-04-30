@@ -20,6 +20,9 @@ app.use(express.json());
 // (in-memory Map blown away on cold start every 15 min) and no email-sending lib was installed.
 // sync-api retires under G4 — replaced by Supabase Auth's built-in magic-link if ever needed.
 
+// In-memory user store (resets on each Render restart)
+const userStore = new Map();
+
 userStore.set('test@example.com', { id: '1', email: 'test@example.com', name: 'Test User', hasPaymentMethodOnFile: false });
 userStore.set('demo@techpulse.dev', { id: '2', email: 'demo@techpulse.dev', name: 'Demo User', hasPaymentMethodOnFile: true });
 
