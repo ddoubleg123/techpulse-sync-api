@@ -1,6 +1,6 @@
 const express = require('express');
 const cors = require('cors');
-const crypto = require('crypto');
+const crypto = require('crypto'); const jwt = (() => { try { return require('jsonwebtoken'); } catch (e) { return null; } })();
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -8,7 +8,7 @@ const PORT = process.env.PORT || 3001;
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
 const REDIRECT_URI = 'https://techpulse-sync-api.onrender.com/api/auth/google/callback';
-const APP_URL = 'https://techpulse-remotepc-automation.onrender.com/app';
+const APP_URL = 'https://techpulse-remotepc-automation.onrender.com/app'; const SUPABASE_URL = process.env.SUPABASE_URL; const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY; const SUPABASE_JWT_SECRET = process.env.SUPABASE_JWT_SECRET; const SUPABASE_AUTH_ENABLED = !!(SUPABASE_URL && SUPABASE_SERVICE_KEY && SUPABASE_JWT_SECRET);
 
 app.use(cors({
   origin: ['https://techpulse.dev', 'https://www.techpulse.dev', 'http://localhost:3000'],
@@ -30,8 +30,8 @@ function generateOTP() {
   return Math.floor(100000 + Math.random() * 900000).toString();
 }
 
-function generateToken(user) {
-  const payload = { userId: user.id, email: user.email, exp: Date.now() + (24 * 60 * 60 * 1000) };
+async function findOrCreateSupabaseUser(email, name) { if (!SUPABASE_AUTH_ENABLED) return null; const headers = { apikey: SUPABASE_SERVICE_KEY, Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`, 'Content-Type': 'application/json' }; try { const createRes = await fetch(`${SUPABASE_URL}/auth/v1/admin/users`, { method: 'POST', headers, body: JSON.stringify({ email, email_confirm: true, user_metadata: { name: name || '' } }) }); if (createRes.ok) return await createRes.json(); const listRes = await fetch(`${SUPABASE_URL}/auth/v1/admin/users?per_page=1000`, { headers }); if (listRes.ok) { const data = await listRes.json(); const users = data.users || []; return users.find(u => (u.email || '').toLowerCase() === email.toLowerCase()) || null; } return null; } catch (err) { console.error('Supabase admin error:', err.message); return null; } } function generateToken(user, supabaseUser) {
+  if (SUPABASE_AUTH_ENABLED && jwt && supabaseUser && supabaseUser.id) { try { return jwt.sign({ sub: supabaseUser.id, email: user.email, aud: 'authenticated', role: 'authenticated' }, SUPABASE_JWT_SECRET, { algorithm: 'HS256', expiresIn: '7d' }); } catch (err) { console.error('JWT sign failed, falling back:', err.message); } } const payload = { userId: user.id, email: user.email, exp: Date.now() + (24 * 60 * 60 * 1000) };
   return Buffer.from(JSON.stringify(payload)).toString('base64');
 }
 
@@ -89,7 +89,7 @@ app.get('/api/auth/google/callback', async (req, res) => {
       user = { id: googleUser.id || crypto.randomUUID(), email: googleUser.email, name: googleUser.name, hasPaymentMethodOnFile: false };
       userStore.set(googleUser.email, user);
     }
-    const token = generateToken(user);
+    const supabaseUser = await findOrCreateSupabaseUser(user.email, user.name); const token = generateToken(user, supabaseUser);
     const redirectUrl = new URL(APP_URL);
     redirectUrl.searchParams.set('token', token);
     redirectUrl.searchParams.set('email', user.email);
