@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const crypto = require('crypto'); const jwt = (() => { try { return require('jsonwebtoken'); } catch (e) { return null; } })();
+const { Resend } = require('resend');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -15,6 +16,15 @@ app.use(cors({
   credentials: true
 }));
 app.use(express.json());
+
+// ===== Email OTP (added 2026-05-17) =====
+// Restores email-OTP login for marketing site (techpulse.dev sign-in modal).
+const RESEND_API_KEY = process.env.RESEND_API_KEY;
+const RESEND_FROM = process.env.RESEND_FROM || 'TechPulse <noreply@techpulse.dev>';
+const resend = RESEND_API_KEY ? new Resend(RESEND_API_KEY) : null;
+const otpStore = new Map(); // email -> { otp, expiresAt }
+const OTP_TTL_MS = 10 * 60 * 1000;
+
 
 // OTP storage removed 2026-04-29 (G12). The OTP routes were broken on Render free tier
 // (in-memory Map blown away on cold start every 15 min) and no email-sending lib was installed.
@@ -102,6 +112,67 @@ app.get('/api/auth/google/callback', async (req, res) => {
 
 app.use((err, req, res, next) => res.status(500).json({ message: 'Internal server error' }));
 app.use('*', (req, res) => res.status(404).json({ message: 'Endpoint not found' }));
+
+
+// ===== Email OTP routes =====
+app.post('/api/auth/email/send-otp', async (req, res) => {
+  try {
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return res.status(400).json({ message: 'Valid email required' });
+    }
+    if (!resend) {
+      console.error('[send-otp] RESEND_API_KEY not configured');
+      return res.status(500).json({ message: 'Email service not configured on server' });
+    }
+    const otp = generateOTP();
+    otpStore.set(email, { otp, expiresAt: Date.now() + OTP_TTL_MS });
+    const html = '<div style="font-family:-apple-system,Segoe UI,Arial,sans-serif;max-width:480px;margin:0 auto;padding:32px 24px;color:#1a1a1a;">' +
+      '<div style="font-weight:700;font-size:18px;color:#0d9e7e;margin-bottom:8px;">TechPulse</div>' +
+      '<h2 style="font-size:20px;margin:8px 0 16px;">Your verification code</h2>' +
+      '<p style="font-size:14px;color:#555;margin:0 0 16px;">Enter this code to finish signing in. It expires in 10 minutes.</p>' +
+      '<div style="font-size:32px;font-weight:700;letter-spacing:8px;padding:20px;background:#f4f5f7;border-radius:10px;text-align:center;margin:16px 0;">' + otp + '</div>' +
+      '<p style="font-size:12px;color:#888;margin-top:24px;">If you didn\'t request this, you can safely ignore this email.</p>' +
+      '</div>';
+    const result = await resend.emails.send({
+      from: RESEND_FROM,
+      to: [email],
+      subject: 'Your TechPulse verification code: ' + otp,
+      html,
+      text: 'Your TechPulse verification code: ' + otp + '\n\nThis code expires in 10 minutes.'
+    });
+    if (result && result.error) {
+      console.error('[send-otp] Resend error:', result.error);
+      return res.status(500).json({ message: 'Failed to send verification code', detail: result.error.message || String(result.error) });
+    }
+    return res.json({ success: true });
+  } catch (e) {
+    console.error('[send-otp] exception:', e);
+    return res.status(500).json({ message: 'Failed to send verification code' });
+  }
+});
+
+app.post('/api/auth/email/verify-otp', async (req, res) => {
+  try {
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    const otp = String(req.body?.otp || '').trim();
+    if (!email || !otp) return res.status(400).json({ message: 'Email and code required' });
+    const entry = otpStore.get(email);
+    if (!entry) return res.status(401).json({ message: 'Code expired or not found' });
+    if (Date.now() > entry.expiresAt) {
+      otpStore.delete(email);
+      return res.status(401).json({ message: 'Code expired' });
+    }
+    if (entry.otp !== otp) return res.status(401).json({ message: 'Invalid code' });
+    otpStore.delete(email);
+    const user = await findOrCreateSupabaseUser(email);
+    const token = generateToken(user);
+    return res.json({ token, user });
+  } catch (e) {
+    console.error('[verify-otp] exception:', e);
+    return res.status(500).json({ message: 'Verification failed' });
+  }
+});
 
 app.listen(PORT, () => {
   console.log(`TechPulse Auth API running on port ${PORT}`);
