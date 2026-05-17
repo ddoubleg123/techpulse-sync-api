@@ -110,10 +110,6 @@ app.get('/api/auth/google/callback', async (req, res) => {
   }
 });
 
-app.use((err, req, res, next) => res.status(500).json({ message: 'Internal server error' }));
-app.use('*', (req, res) => res.status(404).json({ message: 'Endpoint not found' }));
-
-
 // ===== Email OTP routes =====
 app.post('/api/auth/email/send-otp', async (req, res) => {
   try {
@@ -173,6 +169,10 @@ app.post('/api/auth/email/verify-otp', async (req, res) => {
     return res.status(500).json({ message: 'Verification failed' });
   }
 });
+
+app.use((err, req, res, next) => res.status(500).json({ message: 'Internal server error' }));
+app.use('*', (req, res) => res.status(404).json({ message: 'Endpoint not found' }));
+
 
 app.listen(PORT, () => {
   console.log(`TechPulse Auth API running on port ${PORT}`);
