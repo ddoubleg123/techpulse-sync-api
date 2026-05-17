@@ -122,7 +122,7 @@ app.post('/api/auth/email/send-otp', async (req, res) => {
       return res.status(500).json({ message: 'Email service not configured on server' });
     }
     const otp = generateOTP();
-    otpStore.set(email, { otp, expiresAt: Date.now() + OTP_TTL_MS });
+    otpStore.set(email, { otp: String(otp), expiresAt: Date.now() + OTP_TTL_MS });
     const html = '<div style="font-family:-apple-system,Segoe UI,Arial,sans-serif;max-width:480px;margin:0 auto;padding:32px 24px;color:#1a1a1a;">' +
       '<div style="font-weight:700;font-size:18px;color:#0d9e7e;margin-bottom:8px;">TechPulse</div>' +
       '<h2 style="font-size:20px;margin:8px 0 16px;">Your verification code</h2>' +
@@ -159,7 +159,7 @@ app.post('/api/auth/email/verify-otp', async (req, res) => {
       otpStore.delete(email);
       return res.status(401).json({ message: 'Code expired' });
     }
-    if (entry.otp !== otp) return res.status(401).json({ message: 'Invalid code' });
+    if (String(entry.otp) !== String(otp)) return res.status(401).json({ message: 'Invalid code' });
     otpStore.delete(email);
     const user = await findOrCreateSupabaseUser(email);
     const token = generateToken(user);
