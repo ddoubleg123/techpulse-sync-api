@@ -20,7 +20,7 @@ app.use(express.json());
 // ===== Email OTP (added 2026-05-17) =====
 // Restores email-OTP login for marketing site (techpulse.dev sign-in modal).
 const RESEND_API_KEY = process.env.RESEND_API_KEY;
-const RESEND_FROM = process.env.RESEND_FROM || 'TechPulse <noreply@techpulse.dev>';
+const RESEND_FROM = process.env.RESEND_FROM_EMAIL || process.env.RESEND_FROM || 'TechPulse <invites@auth.techpulse.dev>';
 const resend = RESEND_API_KEY ? new Resend(RESEND_API_KEY) : null;
 const otpStore = new Map(); // email -> { otp, expiresAt }
 const OTP_TTL_MS = 10 * 60 * 1000;
