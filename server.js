@@ -2,6 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const crypto = require('crypto'); const jwt = (() => { try { return require('jsonwebtoken'); } catch (e) { return null; } })();
 const { Resend } = require('resend');
+const { createClient: createRedisClient } = require('redis');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -22,8 +23,19 @@ app.use(express.json());
 const RESEND_API_KEY = process.env.RESEND_API_KEY;
 const RESEND_FROM = process.env.RESEND_FROM_EMAIL || process.env.RESEND_FROM || 'TechPulse <invites@auth.techpulse.dev>';
 const resend = RESEND_API_KEY ? new Resend(RESEND_API_KEY) : null;
-const otpStore = new Map(); // email -> { otp, expiresAt }
-const OTP_TTL_MS = 10 * 60 * 1000;
+const OTP_TTL_SEC = 10 * 60; // 10 minutes
+
+// Redis client for OTP storage (survives restarts and free-tier spin-downs)
+const REDIS_HOST = process.env.REDIS_HOST;
+const REDIS_PORT = parseInt(process.env.REDIS_PORT || '6379', 10);
+const redisClient = REDIS_HOST ? createRedisClient({ socket: { host: REDIS_HOST, port: REDIS_PORT } }) : null;
+let redisReady = false;
+if (redisClient) {
+  redisClient.on('error', e => console.error('[redis] error:', e.message));
+  redisClient.on('ready', () => { redisReady = true; console.log('[redis] connected'); });
+  redisClient.connect().catch(e => console.error('[redis] connect failed:', e.message));
+}
+const otpKey = email => `otp:${email}`;
 
 
 // OTP storage removed 2026-04-29 (G12). The OTP routes were broken on Render free tier
@@ -122,7 +134,11 @@ app.post('/api/auth/email/send-otp', async (req, res) => {
       return res.status(500).json({ message: 'Email service not configured on server' });
     }
     const otp = generateOTP();
-    otpStore.set(email, { otp: String(otp), expiresAt: Date.now() + OTP_TTL_MS });
+    if (!redisReady) {
+      console.error('[send-otp] Redis not ready');
+      return res.status(503).json({ message: 'OTP service temporarily unavailable, please retry' });
+    }
+    await redisClient.set(otpKey(email), String(otp), { EX: OTP_TTL_SEC });
     const html = '<div style="font-family:-apple-system,Segoe UI,Arial,sans-serif;max-width:480px;margin:0 auto;padding:32px 24px;color:#1a1a1a;">' +
       '<div style="font-weight:700;font-size:18px;color:#0d9e7e;margin-bottom:8px;">TechPulse</div>' +
       '<h2 style="font-size:20px;margin:8px 0 16px;">Your verification code</h2>' +
@@ -153,14 +169,14 @@ app.post('/api/auth/email/verify-otp', async (req, res) => {
     const email = String(req.body?.email || '').trim().toLowerCase();
     const otp = String(req.body?.otp || '').trim();
     if (!email || !otp) return res.status(400).json({ message: 'Email and code required' });
-    const entry = otpStore.get(email);
-    if (!entry) return res.status(401).json({ message: 'Code expired or not found' });
-    if (Date.now() > entry.expiresAt) {
-      otpStore.delete(email);
-      return res.status(401).json({ message: 'Code expired' });
+    if (!redisReady) {
+      console.error('[verify-otp] Redis not ready');
+      return res.status(503).json({ message: 'OTP service temporarily unavailable, please retry' });
     }
-    if (String(entry.otp) !== String(otp)) return res.status(401).json({ message: 'Invalid code' });
-    otpStore.delete(email);
+    const stored = await redisClient.get(otpKey(email));
+    if (!stored) return res.status(401).json({ message: 'Code expired or not found' });
+    if (String(stored) !== String(otp)) return res.status(401).json({ message: 'Invalid code' });
+    await redisClient.del(otpKey(email));
     const user = await findOrCreateSupabaseUser(email);
     const token = generateToken(user);
     return res.json({ token, user });
