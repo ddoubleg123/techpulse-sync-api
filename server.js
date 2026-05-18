@@ -7,8 +7,16 @@ const { createClient: createRedisClient } = require('redis');
 
 
 
+
+
+
+
 const app = express();
 const PORT = process.env.PORT || 3001;
+
+
+
+
 
 
 
@@ -16,7 +24,11 @@ const PORT = process.env.PORT || 3001;
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
 const REDIRECT_URI = 'https://techpulse-sync-api.onrender.com/api/auth/google/callback';
-const APP_URL = 'https://techpulse-remotepc-automation.onrender.com/app'; const SUPABASE_URL = process.env.SUPABASE_URL; const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY; const SUPABASE_JWT_SECRET = process.env.SUPABASE_JWT_SECRET; const SUPABASE_AUTH_ENABLED = !!(SUPABASE_URL && SUPABASE_SERVICE_KEY && SUPABASE_JWT_SECRET);
+const APP_URL = 'https://app.techpulse.dev/app'; const SUPABASE_URL = process.env.SUPABASE_URL; const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY; const SUPABASE_JWT_SECRET = process.env.SUPABASE_JWT_SECRET; const SUPABASE_AUTH_ENABLED = !!(SUPABASE_URL && SUPABASE_SERVICE_KEY && SUPABASE_JWT_SECRET);
+
+
+
+
 
 
 
@@ -30,12 +42,20 @@ app.use(express.json({ limit: '10mb' }));
 
 
 
+
+
+
+
 // ===== Email OTP (added 2026-05-17) =====
 // Restores email-OTP login for marketing site (techpulse.dev sign-in modal).
 const RESEND_API_KEY = process.env.RESEND_API_KEY;
 const RESEND_FROM = process.env.RESEND_FROM_EMAIL || process.env.RESEND_FROM || 'TechPulse <invites@auth.techpulse.dev>';
 const resend = RESEND_API_KEY ? new Resend(RESEND_API_KEY) : null;
 const OTP_TTL_SEC = 10 * 60; // 10 minutes
+
+
+
+
 
 
 
@@ -59,9 +79,21 @@ const otpKey = email => `otp:${email}`;
 
 
 
+
+
+
+
+
+
+
+
 // OTP storage removed 2026-04-29 (G12). The OTP routes were broken on Render free tier
 // (in-memory Map blown away on cold start every 15 min) and no email-sending lib was installed.
 // sync-api retires under G4 — replaced by Supabase Auth's built-in magic-link if ever needed.
+
+
+
+
 
 
 
@@ -72,8 +104,16 @@ const userStore = new Map();
 
 
 
+
+
+
+
 userStore.set('test@example.com', { id: '1', email: 'test@example.com', name: 'Test User', hasPaymentMethodOnFile: false });
 userStore.set('demo@techpulse.dev', { id: '2', email: 'demo@techpulse.dev', name: 'Demo User', hasPaymentMethodOnFile: true });
+
+
+
+
 
 
 
@@ -85,10 +125,18 @@ function generateOTP() {
 
 
 
+
+
+
+
 async function findOrCreateSupabaseUser(email, name) { if (!SUPABASE_AUTH_ENABLED) return null; const headers = { apikey: SUPABASE_SERVICE_KEY, Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`, 'Content-Type': 'application/json' }; try { const createRes = await fetch(`${SUPABASE_URL}/auth/v1/admin/users`, { method: 'POST', headers, body: JSON.stringify({ email, email_confirm: true, user_metadata: { name: name || '' } }) }); if (createRes.ok) return await createRes.json(); const listRes = await fetch(`${SUPABASE_URL}/auth/v1/admin/users?per_page=1000`, { headers }); if (listRes.ok) { const data = await listRes.json(); const users = data.users || []; return users.find(u => (u.email || '').toLowerCase() === email.toLowerCase()) || null; } return null; } catch (err) { console.error('Supabase admin error:', err.message); return null; } } function generateToken(user, supabaseUser) {
   if (SUPABASE_AUTH_ENABLED && jwt && supabaseUser && supabaseUser.id) { try { return jwt.sign({ sub: supabaseUser.id, email: user.email, aud: 'authenticated', role: 'authenticated' }, SUPABASE_JWT_SECRET, { algorithm: 'HS256', expiresIn: '7d' }); } catch (err) { console.error('JWT sign failed, falling back:', err.message); } } const payload = { userId: user.id, email: user.email, exp: Date.now() + (24 * 60 * 60 * 1000) };
   return Buffer.from(JSON.stringify(payload)).toString('base64');
 }
+
+
+
+
 
 
 
@@ -116,8 +164,16 @@ async function getGoogleUser(code) {
 
 
 
+
+
+
+
 app.get('/health', (req, res) => res.json({ status: 'OK', timestamp: new Date().toISOString() }));
 app.get('/', (req, res) => res.json({ status: 'TechPulse Auth API' }));
+
+
+
+
 
 
 
@@ -126,6 +182,14 @@ app.get('/', (req, res) => res.json({ status: 'TechPulse Auth API' }));
 // Reason: routes were broken on Render free tier and no email transport was configured.
 // Auth flow now uses Google OAuth only (the routes below).
 // sync-api retires under G4 — Supabase Auth has built-in magic-link if needed.
+
+
+
+
+
+
+
+
 
 
 
@@ -146,6 +210,10 @@ app.get('/api/auth/google', (req, res) => {
   });
   res.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${params}`);
 });
+
+
+
+
 
 
 
@@ -172,6 +240,10 @@ app.get('/api/auth/google/callback', async (req, res) => {
     res.redirect(302, 'https://www.techpulse.dev?error=auth_failed');
   }
 });
+
+
+
+
 
 
 
@@ -221,6 +293,10 @@ app.post('/api/auth/email/send-otp', async (req, res) => {
 
 
 
+
+
+
+
 // ============ Supabase profile helpers ============
 async function fetchProfileRow(userId) {
   if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_KEY) return null;
@@ -239,6 +315,8 @@ async function fetchProfileRow(userId) {
     return null;
   }
 }
+
+
 
 
 async function upsertProfileRow(userId, email, fields) {
@@ -269,6 +347,8 @@ async function upsertProfileRow(userId, email, fields) {
 }
 
 
+
+
 // ============ JWT auth middleware ============
 function requireAuth(req, res, next) {
   const authHeader = req.headers.authorization || '';
@@ -284,6 +364,8 @@ function requireAuth(req, res, next) {
     return res.status(401).json({ error: 'Invalid or expired token' });
   }
 }
+
+
 
 
 function shapeUser(req, row) {
@@ -303,11 +385,15 @@ function shapeUser(req, row) {
 }
 
 
+
+
 // ============ Profile endpoints ============
 app.get('/api/profile/me', requireAuth, async (req, res) => {
   const row = await fetchProfileRow(req.userId);
   res.json(shapeUser(req, row));
 });
+
+
 
 
 app.post('/api/profile/update', requireAuth, async (req, res) => {
@@ -322,6 +408,8 @@ app.post('/api/profile/update', requireAuth, async (req, res) => {
   if (!row) return res.status(500).json({ error: 'Failed to save profile' });
   res.json({ ok: true, user: shapeUser(req, row) });
 });
+
+
 
 
 app.post('/api/profile/upload-photo', requireAuth, async (req, res) => {
@@ -368,6 +456,8 @@ app.post('/api/profile/upload-photo', requireAuth, async (req, res) => {
 });
 
 
+
+
 app.post('/api/profile/onboarding', requireAuth, async (req, res) => {
   const { businessName, address, phone } = req.body || {};
   if (typeof businessName !== 'string' || typeof address !== 'string' || typeof phone !== 'string') {
@@ -383,6 +473,8 @@ app.post('/api/profile/onboarding', requireAuth, async (req, res) => {
   if (!row) return res.status(500).json({ error: 'Failed to save onboarding' });
   res.json({ ok: true, user: shapeUser(req, row) });
 });
+
+
 
 
 app.post('/api/auth/email/verify-otp', async (req, res) => {
@@ -426,8 +518,20 @@ app.post('/api/auth/email/verify-otp', async (req, res) => {
 
 
 
+
+
+
+
 app.use((err, req, res, next) => res.status(500).json({ message: 'Internal server error' }));
 app.use('*', (req, res) => res.status(404).json({ message: 'Endpoint not found' }));
+
+
+
+
+
+
+
+
 
 
 
@@ -439,6 +543,10 @@ app.use('*', (req, res) => res.status(404).json({ message: 'Endpoint not found' 
 app.listen(PORT, () => {
   console.log(`TechPulse Auth API running on port ${PORT}`);
 });
+
+
+
+
 
 
 
