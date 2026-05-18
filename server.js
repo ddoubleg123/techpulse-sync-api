@@ -4,19 +4,23 @@ const crypto = require('crypto'); const jwt = (() => { try { return require('jso
 const { Resend } = require('resend');
 const { createClient: createRedisClient } = require('redis');
 
+
 const app = express();
 const PORT = process.env.PORT || 3001;
+
 
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
 const REDIRECT_URI = 'https://techpulse-sync-api.onrender.com/api/auth/google/callback';
 const APP_URL = 'https://techpulse-remotepc-automation.onrender.com/app'; const SUPABASE_URL = process.env.SUPABASE_URL; const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY; const SUPABASE_JWT_SECRET = process.env.SUPABASE_JWT_SECRET; const SUPABASE_AUTH_ENABLED = !!(SUPABASE_URL && SUPABASE_SERVICE_KEY && SUPABASE_JWT_SECRET);
 
+
 app.use(cors({
-  origin: ['https://techpulse.dev', 'https://www.techpulse.dev', 'http://localhost:3000'],
+  origin: ['https://techpulse.dev', 'https://www.techpulse.dev', 'https://techpulse-remotepc-automation.onrender.com', 'http://localhost:3000'],
   credentials: true
 }));
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
+
 
 // ===== Email OTP (added 2026-05-17) =====
 // Restores email-OTP login for marketing site (techpulse.dev sign-in modal).
@@ -24,6 +28,7 @@ const RESEND_API_KEY = process.env.RESEND_API_KEY;
 const RESEND_FROM = process.env.RESEND_FROM_EMAIL || process.env.RESEND_FROM || 'TechPulse <invites@auth.techpulse.dev>';
 const resend = RESEND_API_KEY ? new Resend(RESEND_API_KEY) : null;
 const OTP_TTL_SEC = 10 * 60; // 10 minutes
+
 
 // Redis client for OTP storage (survives restarts and free-tier spin-downs)
 const REDIS_HOST = process.env.REDIS_HOST;
@@ -38,24 +43,31 @@ if (redisClient) {
 const otpKey = email => `otp:${email}`;
 
 
+
+
 // OTP storage removed 2026-04-29 (G12). The OTP routes were broken on Render free tier
 // (in-memory Map blown away on cold start every 15 min) and no email-sending lib was installed.
 // sync-api retires under G4 — replaced by Supabase Auth's built-in magic-link if ever needed.
 
+
 // In-memory user store (resets on each Render restart)
 const userStore = new Map();
 
+
 userStore.set('test@example.com', { id: '1', email: 'test@example.com', name: 'Test User', hasPaymentMethodOnFile: false });
 userStore.set('demo@techpulse.dev', { id: '2', email: 'demo@techpulse.dev', name: 'Demo User', hasPaymentMethodOnFile: true });
+
 
 function generateOTP() {
   return Math.floor(100000 + Math.random() * 900000).toString();
 }
 
+
 async function findOrCreateSupabaseUser(email, name) { if (!SUPABASE_AUTH_ENABLED) return null; const headers = { apikey: SUPABASE_SERVICE_KEY, Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`, 'Content-Type': 'application/json' }; try { const createRes = await fetch(`${SUPABASE_URL}/auth/v1/admin/users`, { method: 'POST', headers, body: JSON.stringify({ email, email_confirm: true, user_metadata: { name: name || '' } }) }); if (createRes.ok) return await createRes.json(); const listRes = await fetch(`${SUPABASE_URL}/auth/v1/admin/users?per_page=1000`, { headers }); if (listRes.ok) { const data = await listRes.json(); const users = data.users || []; return users.find(u => (u.email || '').toLowerCase() === email.toLowerCase()) || null; } return null; } catch (err) { console.error('Supabase admin error:', err.message); return null; } } function generateToken(user, supabaseUser) {
   if (SUPABASE_AUTH_ENABLED && jwt && supabaseUser && supabaseUser.id) { try { return jwt.sign({ sub: supabaseUser.id, email: user.email, aud: 'authenticated', role: 'authenticated' }, SUPABASE_JWT_SECRET, { algorithm: 'HS256', expiresIn: '7d' }); } catch (err) { console.error('JWT sign failed, falling back:', err.message); } } const payload = { userId: user.id, email: user.email, exp: Date.now() + (24 * 60 * 60 * 1000) };
   return Buffer.from(JSON.stringify(payload)).toString('base64');
 }
+
 
 async function getGoogleUser(code) {
   const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
@@ -77,13 +89,17 @@ async function getGoogleUser(code) {
   return userRes.json();
 }
 
+
 app.get('/health', (req, res) => res.json({ status: 'OK', timestamp: new Date().toISOString() }));
 app.get('/', (req, res) => res.json({ status: 'TechPulse Auth API' }));
+
 
 // OTP routes (/api/auth/email/send-otp, /api/auth/email/verify-otp) removed 2026-04-29 (G12).
 // Reason: routes were broken on Render free tier and no email transport was configured.
 // Auth flow now uses Google OAuth only (the routes below).
 // sync-api retires under G4 — Supabase Auth has built-in magic-link if needed.
+
+
 
 
 // Initiates Google OAuth — redirect_uri must match Google Cloud Console exactly
@@ -98,6 +114,7 @@ app.get('/api/auth/google', (req, res) => {
   });
   res.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${params}`);
 });
+
 
 // Google OAuth callback — always redirects to app, never returns JSON
 app.get('/api/auth/google/callback', async (req, res) => {
@@ -121,6 +138,7 @@ app.get('/api/auth/google/callback', async (req, res) => {
     res.redirect(302, 'https://www.techpulse.dev?error=auth_failed');
   }
 });
+
 
 // ===== Email OTP routes =====
 app.post('/api/auth/email/send-otp', async (req, res) => {
@@ -164,6 +182,163 @@ app.post('/api/auth/email/send-otp', async (req, res) => {
   }
 });
 
+
+// ============ Supabase profile helpers ============
+async function fetchProfileRow(userId) {
+  if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_KEY) return null;
+  try {
+    const r = await fetch(`${process.env.SUPABASE_URL}/rest/v1/users?id=eq.${encodeURIComponent(userId)}&select=*`, {
+      headers: {
+        apikey: process.env.SUPABASE_SERVICE_KEY,
+        Authorization: `Bearer ${process.env.SUPABASE_SERVICE_KEY}`,
+      },
+    });
+    if (!r.ok) return null;
+    const rows = await r.json();
+    return rows[0] || null;
+  } catch (e) {
+    console.error('[fetchProfileRow]', e.message);
+    return null;
+  }
+}
+
+async function upsertProfileRow(userId, email, fields) {
+  if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_KEY) return null;
+  const body = { id: userId, email, ...fields, updated_at: new Date().toISOString() };
+  try {
+    const r = await fetch(`${process.env.SUPABASE_URL}/rest/v1/users?on_conflict=id`, {
+      method: 'POST',
+      headers: {
+        apikey: process.env.SUPABASE_SERVICE_KEY,
+        Authorization: `Bearer ${process.env.SUPABASE_SERVICE_KEY}`,
+        'Content-Type': 'application/json',
+        Prefer: 'return=representation,resolution=merge-duplicates',
+      },
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) {
+      const errText = await r.text();
+      console.error('[upsertProfileRow]', r.status, errText);
+      return null;
+    }
+    const rows = await r.json();
+    return rows[0] || null;
+  } catch (e) {
+    console.error('[upsertProfileRow]', e.message);
+    return null;
+  }
+}
+
+// ============ JWT auth middleware ============
+function requireAuth(req, res, next) {
+  const authHeader = req.headers.authorization || '';
+  const m = authHeader.match(/^Bearer\s+(.+)$/i);
+  if (!m) return res.status(401).json({ error: 'Missing bearer token' });
+  try {
+    const decoded = jwt.verify(m[1], process.env.SUPABASE_JWT_SECRET, { audience: 'authenticated' });
+    req.userId = decoded.userId || decoded.sub;
+    req.userEmail = decoded.email;
+    if (!req.userId) return res.status(401).json({ error: 'Invalid token: no user id' });
+    next();
+  } catch (e) {
+    return res.status(401).json({ error: 'Invalid or expired token' });
+  }
+}
+
+function shapeUser(req, row) {
+  const r = row || {};
+  return {
+    id: req.userId,
+    email: req.userEmail,
+    onboarding_completed: !!r.onboarding_completed,
+    firstName: r.first_name || '',
+    lastName: r.last_name || '',
+    phone: r.phone || '',
+    address: r.address || '',
+    businessName: r.business_name || '',
+    businessAddress: r.business_address || '',
+    photoUrl: r.photo_url || '',
+  };
+}
+
+// ============ Profile endpoints ============
+app.get('/api/profile/me', requireAuth, async (req, res) => {
+  const row = await fetchProfileRow(req.userId);
+  res.json(shapeUser(req, row));
+});
+
+app.post('/api/profile/update', requireAuth, async (req, res) => {
+  const { firstName, lastName } = req.body || {};
+  if (typeof firstName !== 'string' || typeof lastName !== 'string') {
+    return res.status(400).json({ error: 'firstName and lastName required' });
+  }
+  const row = await upsertProfileRow(req.userId, req.userEmail, {
+    first_name: firstName.trim().slice(0, 100),
+    last_name: lastName.trim().slice(0, 100),
+  });
+  if (!row) return res.status(500).json({ error: 'Failed to save profile' });
+  res.json({ ok: true, user: shapeUser(req, row) });
+});
+
+app.post('/api/profile/upload-photo', requireAuth, async (req, res) => {
+  const { photoBase64, contentType } = req.body || {};
+  if (typeof photoBase64 !== 'string' || !photoBase64.length) {
+    return res.status(400).json({ error: 'photoBase64 required' });
+  }
+  const ct = (contentType || 'image/jpeg').toLowerCase();
+  if (!/^image\/(jpeg|png|webp|gif)$/.test(ct)) {
+    return res.status(400).json({ error: 'Invalid content type. Use jpeg, png, webp, or gif.' });
+  }
+  const cleanB64 = photoBase64.replace(/^data:image\/\w+;base64,/, '');
+  let buf;
+  try { buf = Buffer.from(cleanB64, 'base64'); }
+  catch (e) { return res.status(400).json({ error: 'Invalid base64' }); }
+  if (buf.length > 5 * 1024 * 1024) {
+    return res.status(413).json({ error: 'Photo too large (max 5MB)' });
+  }
+  const ext = ct.split('/')[1].replace('jpeg', 'jpg');
+  const path = `${req.userId}/avatar.${ext}`;
+  try {
+    const up = await fetch(`${process.env.SUPABASE_URL}/storage/v1/object/profile-photos/${path}`, {
+      method: 'POST',
+      headers: {
+        apikey: process.env.SUPABASE_SERVICE_KEY,
+        Authorization: `Bearer ${process.env.SUPABASE_SERVICE_KEY}`,
+        'Content-Type': ct,
+        'x-upsert': 'true',
+      },
+      body: buf,
+    });
+    if (!up.ok) {
+      const errText = await up.text();
+      console.error('[upload-photo]', up.status, errText);
+      return res.status(500).json({ error: 'Storage upload failed' });
+    }
+    const photoUrl = `${process.env.SUPABASE_URL}/storage/v1/object/public/profile-photos/${path}?t=${Date.now()}`;
+    const row = await upsertProfileRow(req.userId, req.userEmail, { photo_url: photoUrl });
+    res.json({ ok: true, photoUrl, user: shapeUser(req, row) });
+  } catch (e) {
+    console.error('[upload-photo]', e.message);
+    res.status(500).json({ error: 'Upload failed' });
+  }
+});
+
+app.post('/api/profile/onboarding', requireAuth, async (req, res) => {
+  const { businessName, address, phone } = req.body || {};
+  if (typeof businessName !== 'string' || typeof address !== 'string' || typeof phone !== 'string') {
+    return res.status(400).json({ error: 'businessName, address, and phone required' });
+  }
+  const row = await upsertProfileRow(req.userId, req.userEmail, {
+    business_name: businessName.trim().slice(0, 255),
+    business_address: address.trim(),
+    address: address.trim(),
+    phone: phone.trim().slice(0, 20),
+    onboarding_completed: true,
+  });
+  if (!row) return res.status(500).json({ error: 'Failed to save onboarding' });
+  res.json({ ok: true, user: shapeUser(req, row) });
+});
+
 app.post('/api/auth/email/verify-otp', async (req, res) => {
   try {
     const email = String(req.body?.email || '').trim().toLowerCase();
@@ -179,19 +354,39 @@ app.post('/api/auth/email/verify-otp', async (req, res) => {
     await redisClient.del(otpKey(email));
     const user = await findOrCreateSupabaseUser(email);
     const token = generateToken(user);
-    return res.json({ token, user: Object.assign({}, user, { onboarding_completed: !!(user.user_metadata && user.user_metadata.onboarding_completed) }) });
+    const profileRow = await fetchProfileRow(user.id);
+    const profile = profileRow || {};
+    return res.json({
+      token,
+      user: {
+        id: user.id,
+        email: user.email,
+        onboarding_completed: !!profile.onboarding_completed,
+        firstName: profile.first_name || '',
+        lastName: profile.last_name || '',
+        phone: profile.phone || '',
+        address: profile.address || '',
+        businessName: profile.business_name || '',
+        businessAddress: profile.business_address || '',
+        photoUrl: profile.photo_url || '',
+      },
+    });
   } catch (e) {
     console.error('[verify-otp] exception:', e);
     return res.status(500).json({ message: 'Verification failed' });
   }
 });
 
+
 app.use((err, req, res, next) => res.status(500).json({ message: 'Internal server error' }));
 app.use('*', (req, res) => res.status(404).json({ message: 'Endpoint not found' }));
+
+
 
 
 app.listen(PORT, () => {
   console.log(`TechPulse Auth API running on port ${PORT}`);
 });
+
 
 module.exports = app;
