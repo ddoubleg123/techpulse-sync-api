@@ -179,7 +179,7 @@ app.post('/api/auth/email/verify-otp', async (req, res) => {
     await redisClient.del(otpKey(email));
     const user = await findOrCreateSupabaseUser(email);
     const token = generateToken(user);
-    return res.json({ token, user });
+    return res.json({ token, user: Object.assign({}, user, { onboarding_completed: !!(user.user_metadata && user.user_metadata.onboarding_completed) }) });
   } catch (e) {
     console.error('[verify-otp] exception:', e);
     return res.status(500).json({ message: 'Verification failed' });
